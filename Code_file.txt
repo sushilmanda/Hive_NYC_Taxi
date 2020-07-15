@@ -1,0 +1,293 @@
+create database 00_manda;
+use 00_manda;
+--Adding a jar file.
+ADD JAR /opt/cloudera/parcels/CDH/lib/hive/lib/hive-hcatalog-core-1.1.0-cdh5.11.2.jar;
+
+--CREATING EXTERNAL TABLE
+create external table if not exists nyc_data(VendorID int, tpep_pickup_datetime timestamp, 
+tpep_dropoff_datetime timestamp, Passenger_count int, Trip_distance double, RateCodeID int, Store_and_fwd_flag string,
+PULocationID int, DOLocationID int, Payment_type int, Fare_amount double,
+Extra double, MTA_tax double, Tip_amount double, Tolls_amount double, Improvement_surcharge double,
+Total_amount double) ROW FORMAT DELIMITED FIELDS TERMINATED BY ','
+STORED AS TEXTFILE
+location '/common_folder/nyc_taxi_data/'
+tblproperties ("skip.header.line.count"="2");
+
+
+--Basic data quality check.
+
+select count(*) from nyc_data;
+--Total records are 1174568
+
+--1. 
+--How many records has each TPEP provider provided? Write a query that summarises the number of records of each provider.
+select vendorid, count(*) as No from nyc_data group by vendorid;
+--In this dataset Vendorid 1 provided 527385 records.
+--Vendorid 2 provided 647183 records.
+
+--2. 
+--   The data provided is for months November and December only. Check whether the data is consistent,
+--   and if not, identify the data quality issues. Mention all data quality issues incomments.
+select year(tpep_pickup_datetime) as `year`, month(tpep_pickup_datetime) as `month`, count(tpep_pickup_datetime) as no 
+from nyc_data group by year(tpep_pickup_datetime), month(tpep_pickup_datetime);
+-- Clearly seen in the results ther are data from the year 2003, 2008, 2009, 2017, 2018 but we need data of only 2017.
+-- In 2017, data is from october, november and december but we don't want the data of october.
+-- So the number of records that are not from November and December of 2017 is 14.
+
+--Checking for null values
+select sum(case when 	VendorID 	 is null then 1 else 0 end) 	VendorID 	,
+sum(case when 	tpep_pickup_datetime 	 is null then 1 else 0 end) 	tpep_pickup_datetime 	,
+sum(case when 	tpep_dropoff_datetime 	 is null then 1 else 0 end) 	tpep_dropoff_datetime 	,
+sum(case when 	passenger_count 	 is null then 1 else 0 end) 	passenger_count 	,
+sum(case when 	trip_distance 	 is null then 1 else 0 end) 	trip_distance 	,
+sum(case when 	RatecodeID 	 is null then 1 else 0 end) 	RatecodeID 	,
+sum(case when 	store_and_fwd_flag 	 is null then 1 else 0 end) 	store_and_fwd_flag 	,
+sum(case when 	PULocationID 	 is null then 1 else 0 end) 	PULocationID 	,
+sum(case when 	DOLocationID 	 is null then 1 else 0 end) 	DOLocationID 	,
+sum(case when 	payment_type 	 is null then 1 else 0 end) 	payment_type 	,
+sum(case when 	fare_amount 	 is null then 1 else 0 end) 	fare_amount 	,
+sum(case when 	extra 	 is null then 1 else 0 end) 	extra 	,
+sum(case when 	mta_tax 	 is null then 1 else 0 end) 	mta_tax 	,
+sum(case when 	tip_amount 	 is null then 1 else 0 end) 	tip_amount 	,
+sum(case when 	tolls_amount 	 is null then 1 else 0 end) 	tolls_amount 	,
+sum(case when 	improvement_surcharge 	 is null then 1 else 0 end) 	improvement_surcharge 	,
+sum(case when 	total_amount 	 is null then 1 else 0 end) 	total_amount 	
+from nyc_data;
+--There are no null values
+
+--3. 
+--  You might have encountered unusual or erroneous rows in the dataset. Can you conclude which vendor is doing a bad job in 
+--   providing the records using different columns of the dataset? Summarise your conclusions based on every column where these 
+--   errors are present. For example, There are unusual passenger count, i.e. 0 which is unusual.
+--So for this we need to check every column and analysis which vendor is providing more error in records.
+
+-- First, let's check for passenger counts.
+select vendorid, Passenger_count as No_of_passengers, count(*) as No_of_records from nyc_data 
+group by vendorid, passenger_count order by vendorid, passenger_count;
+-- From results it can be seen that vendorid 1 provided 6813 records for number of passengers as 0 but vendorid 2 provided 11 records only.
+-- Apart from that number of passengers are in range 0 to 9 so except 0 all records are accepted.
+
+--Second, let's check for the distance of trip. As trip distance can not be less than 0 as distance can not be negative.
+select vendorid, count(Trip_distance) as No_of_records from nyc_data where trip_distance<0 group by vendorid;
+--This column is clean, No errors.
+
+--Third, let's check for ratecodeid, It can only take values of 1,2,3,4,5 and 6 only other than that is error.
+select vendorid, RateCodeID, count(*) as No_of_records from nyc_data group by vendorid, RateCodeID order by vendorid, RateCodeID;
+--Both vendors have a error ratecodeid 99 and it's values are as followes: For vendorid 1 = 8 records and for vendorid 2 = 1 record.
+
+--Forth, Store_and_fwd_flag this column can only take values: Y and N.
+select vendorid, Store_and_fwd_flag, count(*) as No_of_records 
+from nyc_data group by vendorid, Store_and_fwd_flag order by vendorid, Store_and_fwd_flag;
+--Vendor 2 never stored and forwerded any record but vendor 1 stored 3951 records may be because of server problem.
+--As vendor 1 stored some recordes there are chances that these records are manupulated before sending to the vendor.
+
+--Fifth, let's check for Payment_type, It can only take values of 1,2,3,4,5 and 6 only other than that is error.
+select vendorid, Payment_type, count(*) as No_of_records 
+from nyc_data group by vendorid, Payment_type order by vendorid, Payment_type;
+--This column looks clean
+
+--Sixth, let's check for Fare_amount, It can not take less than 0 values.
+select vendorid, count(Fare_amount) as No_of_records from nyc_data where Fare_amount<0 group by vendorid;
+-- Vendor id 2 have 558 records having negative fare amount.
+
+--Seventh, let's check for the values of Extras entered in records. 
+select vendorid, Extra, count(*) No_of_records from nyc_data group by vendorid, Extra order by vendorid, Extra;
+--Extra can only take 0, 0.5 and 1 as valid values. Every thing else is error. Now let's count the number of error records for both vendors.
+select vendorid, count(*) from nyc_data where Extra !=0 and Extra!= 0.5 and Extra!= 1 group by vendorid;
+--Vendor 2 have 3033 error records and vendor 1 have 1823 error records.
+
+--Eight, let's check for MTA_tax. 0 and 0.5 values are permitted for MTA_tax everything else is error.
+select vendorid, MTA_tax, count(*) as No_of_records from nyc_data group by vendorid, mta_tax order by vendorid, mta_tax;
+--Vendor 1 have 1 error record and vendor 2 have 4 error record.
+
+--Nine, let's check for Improvement_surcharge. 0 and 0.3 values are permitted for MTA_tax everything else is error.
+select vendorid, Improvement_surcharge, count(*) as No_of_records 
+from nyc_data group by vendorid, Improvement_surcharge order by vendorid, Improvement_surcharge;
+--Vendor 2 have 562 error records and Vendor 1 have no error records.
+
+--Tenth, let's check for Tip_amount. Tip amount can't be negative.
+select vendorid, count(*) as No_of_records from nyc_data where tip_amount<0 group by vendorid;
+--Vendor 2 have 4 error records and Vendor 1 have no error records.
+
+--Eleventh, let's check for Tolls_amount. It can not be negative.
+select vendorid, count(*) as No_of_records from nyc_data where Tolls_amount<0 group by vendorid;
+--Vendor 2 have 3 error records and Vendor 1 have no error records.
+
+--Twelth, let's check for Total_amount. It can not be negative.
+select vendorid, count(*) as No_of_records from nyc_data where Total_amount<0 group by vendorid;
+--Vendor 2 have 558 error records and Vendor 1 have no error records.
+
+--Last, let's check the duration of trip. It can not be negative.
+select vendorid, count(*) as No_of_records from nyc_data 
+where  (UNIX_TIMESTAMP(tpep_dropoff_datetime)-UNIX_TIMESTAMP(tpep_pickup_datetime)) < 0 group by vendorid;
+--Vendor 1 have 73 records having negative time duration this is error.
+
+--Based on the above Analysis we can say that vendor 2 is doing a bad job in providing the records.
+
+--___________________________________________________________________________________________________________________________________________--
+--ORC partisioned table of records based on month and then vendorid.
+
+--setting parameters of Hive for partitioning.
+SET hive.exec.max.dynamic.partitions=100000;
+SET hive.exec.max.dynamic.partitions.pernode=100000;
+
+--Creating ORC_partioned table
+create external table if not exists nyc_data_orc(VendorID int, tpep_pickup_datetime timestamp, 
+tpep_dropoff_datetime timestamp, Passenger_count int, Trip_distance double, RateCodeID int, Store_and_fwd_flag string,
+PULocationID int, DOLocationID int, Payment_type int, Fare_amount double,
+Extra double, MTA_tax double, Tip_amount double, Tolls_amount double, Improvement_surcharge double,
+Total_amount double) partitioned by (mnth int, vendor string)
+stored as orc location '/user/hive/warehouse/00_manda'
+tblproperties ("orc.compress"="SNAPPY");
+
+--Inserting filterde data in partioned table
+insert overwrite table nyc_data_orc partition(mnth, vendor)
+select vendorid, tpep_pickup_datetime, tpep_dropoff_datetime, passenger_count, trip_distance,
+ratecodeid, store_and_fwd_flag, pulocationid, dolocationid, payment_type, fare_amount, extra, mta_tax, 
+tip_amount, tolls_amount, improvement_surcharge, total_amount,
+month(tpep_pickup_datetime) as mnth, vendorid as vendor
+from nyc_data 
+where passenger_count not in(0, 192) and trip_distance > 0 
+and RateCodeID != 99 and fare_amount > 0 and extra in (0, 0.5, 1) 
+and mta_tax in (0,0.5) and tip_amount >= 0
+and tolls_amount >= 0 and improvement_surcharge = 0.30 
+and total_amount >= 0 and year(tpep_pickup_datetime) = 2017 and month(tpep_pickup_datetime) in (11,12);
+
+--Checking the data
+select count(*) from nyc_data_orc;
+-- After filtereing we have 1155418 total records
+
+--Checking if there is any null values
+select count(*) as Total_NULL_records from nyc_data_orc
+where vendorid is null 
+or tpep_pickup_datetime is null
+or tpep_pickup_datetime is null
+or passenger_count is null
+or trip_distance is null
+or ratecodeid is null
+or store_and_fwd_flag is null
+or pulocationid is null
+or dolocationid is null
+or payment_type is null
+or fare_amount is null
+or extra is null
+or mta_tax is null
+or tip_amount is null
+or tolls_amount is null
+or improvement_surcharge is null
+or total_amount is null
+or mnth is null
+or vendor is null;
+--No null values
+
+--_____________________________________________________________________________________________________________________________--
+
+--Now let's move to analysis-I part
+
+--1) Compare the overall average fare per trip for November and December.
+select round(avg(Fare_amount), 2) as avg_far_par_trip, mnth from nyc_data_orc group by mnth;
+--Average fare per trip for November is $12.91 and for December is $12.71.
+--From this we can say there is not much of a difference Average fare per trip for both months.
+
+--2) Explore the ‘number of passengers per trip’ - how many trips are made by each level of ‘Passenger_count’? 
+--   Do most people travel solo or with other people?
+select Passenger_count, count(*) as No_of_trips, count(*)/1155418*100 as percentage_of_trips 
+from nyc_data_orc group by Passenger_count;
+--trips are made by each level of Passenger_count are as follow:
+ --	passenger_count	         percentage  
+--1 	1	                 70.84
+--2	    2	                 15.14
+--3	    5	                 4.68
+--4	    3                    4.35
+--5	    6	                  2.85
+--6	    4 	                  2.14
+--7	    7                     0.0003
+--Above 70 percent of passengers travel solo.
+
+--3) Which is the most preferred mode of payment?
+select Payment_type, count(*) as No_of_payments, count(*)/1155418*100 as percentage 
+from nyc_data_orc group by payment_type;
+------payment_type	  cnt
+----1	1	          67.49 Credit card
+----2	2	          31.98  Cash
+----3	3	          0.41 No charge
+----4	4	          0.11  Dispute
+--Credit Card is the most preferred type of payment mode, it is used by 67.49 percent of the total payment type.
+
+--4) What is the average tip paid per trip? Compare the average tip with the 25th, 50th and 75th percentiles and 
+--comment whether the ‘average tip’ is a representative statistic (of the central tendency) of ‘tip amount paid’. 
+select avg(tip_amount) as avg_tip, percentile_approx(Tip_amount, 0.25) as 25th_percentile, 
+percentile_approx(Tip_amount, 0.5) as 50th_percentile, 
+percentile_approx(Tip_amount, 0.75) as 75th_percentile from nyc_data_orc;
+--Avg tip per trip is 1.82, 25th percentile is 0, 50th percentile is 1.36 and 75th percentile is 2.45.
+--From these we can see that data is swewed toward higher percentiles. 25th or more percentile trips being 0 affects the avg tip paid per trip
+--so the ‘average tip’ is not a representative statistic (of the central tendency) of ‘tip amount paid’.
+
+--5) Explore the ‘Extra’ (charge) variable - what fraction of total trips have an extra charge is levied?
+select extra,round((count(*)*100/1155418),4) percentage from (
+select case when extra>0 then 1 else 0 end  extra
+from nyc_data_orc ) T
+group by extra
+order by cnt desc;
+-- Extra applied   percentage
+--      0	        53.868
+--      1	        46.132
+-- The distribusion is fairly even with 46.132% records having extra charges applied , where as  53.868% have no extra charges applied
+
+--_____________________________________________________________________________________________________________________________--\
+
+--Now let's move to analysis-II part
+
+--1) What is the correlation between the number of passengers on any given trip, and the tip paid per trip? 
+--Do multiple travellers tip more compared to solo travellers?
+select round(corr(passenger_count, tip_amount),4) from nyc_data_orc;
+-- -0.0054
+-- the value is very small although negative but its would be fair to say that passenger count is unrealted to the tip amount paid.
+
+--2) Segregate the data into five segments of ‘tip paid’: [0-5), [5-10), [10-15) , [15-20) and >=20. 
+--Calculate the percentage share of each bucket (i.e. the fraction of trips falling in each bucket).
+select Tip_range, round((count(*)*100/1155418),4) percentage
+from (select
+case when (tip_amount>=0 and tip_amount<5)   then '[0-5)' 
+     when (tip_amount>=5 and tip_amount<10)  then '[5-10)' 
+     when (tip_amount>=10 and tip_amount<15) then '[10-15)'
+     when (tip_amount>=15 and tip_amount<20) then '[15-20)'
+     when (tip_amount>=20)                   then '>=20' end Tip_range
+     from nyc_data_orc) T 
+     group by Tip_range
+     order by cnt desc;
+--  tip_range   	percentage
+--	[0-5)	        92.3874
+--	[5-10)	        5.638
+--	[10-15)	        1.6951
+--	[15-20)	        0.1895
+--	>=20	        0.0898
+
+--3) Which month has a greater average ‘speed’ - November or December? 
+--Note that the variable ‘speed’ will have to be derived from other metrics.
+select mnth , round(avg(trip_distance/((unix_timestamp(tpep_dropoff_datetime)-unix_timestamp(tpep_pickup_datetime) )/3600) ),2) avg_speed
+from nyc_data_orc
+group by mnth
+order by avg_speed desc;
+--mnth	    avg_speed
+--	12	    11.07
+--	11	    10.96
+--December has egreater avg speed but the difference is very small so it is unfair to say any of the month has greater average speed.
+
+--4) Analyse the average speed of the most happening days of the year, 
+--i.e. 31st December (New year’s eve) and 25th December (Christmas) and compare it with the overall average.
+select IsHoliday, round(avg(speed),2) avg_speed from 
+(select case when ((tpep_pickup_datetime>='2017-12-25 00:00:00.0' and tpep_pickup_datetime<'2017-12-26 00:00:00.0') 
+or (tpep_pickup_datetime>='2017-12-31 00:00:00.0' and tpep_pickup_datetime<'2018-01-01 00:00:00.0')  ) then 1 else 0 end IsHoliday   , 
+trip_distance/((unix_timestamp(tpep_dropoff_datetime)-unix_timestamp(tpep_pickup_datetime) )/3600) speed
+from nyc_data_orc) T
+group by IsHoliday
+order by avg_speed desc;
+--isholiday 	avg_speed
+--	1	        14.01
+--	0	        10.95
+select 14.01-10.95;
+--3.06
+-- The comparision between holiday vs non-holiday , the during the holiday atleast the streets of New York are clear(er)
+-- as the Cab's are running at a faster average speed by a margin of 3.06 miles/hour
+
